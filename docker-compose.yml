@@ -1,8 +1,7 @@
-version: '3.9'
 services:
-  multi4channels:
-    build: .
-    container_name: multi4channels
+  multi4channels-qsv:
+    image: ghcr.io/rice9797/multi4channels-qsv:${TAG}
+    container_name: multi4channels-qsv
     ports:
       - ${HOST_PORT}:${WEB_PAGE_PORT}
       - ${HOST_RTP}:${RTP_PORT}/udp
@@ -17,9 +16,9 @@ services:
       - RTP_PORT=${RTP_PORT}
       - WEB_PAGE_PORT=${WEB_PAGE_PORT}
     volumes:
-      - multi4channels:/app/data
+      - multi4channels-qsv:/app/data
       - ./app/photos:/app/photos
     restart: unless-stopped
 volumes:
-  multi4channels:
+  multi4channels-qsv:
     name: ${HOST_VOLUME}
