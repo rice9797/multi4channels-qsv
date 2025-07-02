@@ -1,3 +1,4 @@
+
 FROM debian:bookworm-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -22,10 +23,11 @@ RUN pip install --no-cache-dir flask requests
 
 COPY app /app
 COPY start.sh /start.sh
+COPY init-data.sh /init-data.sh
 
-RUN chmod +x /start.sh && \
+RUN chmod +x /start.sh /init-data.sh && \
     chown -R appuser:appuser /app && \
     chmod -R u+w /app
 
 USER appuser
-CMD ["/start.sh"]
+CMD ["/init-data.sh"]
