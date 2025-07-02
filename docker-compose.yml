@@ -1,0 +1,25 @@
+version: '3.9'
+services:
+  multi4channels:
+    build: .
+    container_name: multi4channels
+    ports:
+      - ${HOST_PORT}:${WEB_PAGE_PORT}
+      - ${HOST_RTP}:${RTP_PORT}/udp
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      - CDVR_HOST=${CDVR_HOST}
+      - CDVR_PORT=${CDVR_PORT}
+      - CDVR_CHNLNUM=${CDVR_CHNLNUM}
+      - OUTPUT_FPS=${OUTPUT_FPS}
+      - RTP_HOST=${RTP_HOST}
+      - RTP_PORT=${RTP_PORT}
+      - WEB_PAGE_PORT=${WEB_PAGE_PORT}
+    volumes:
+      - multi4channels:/app/data
+      - ./app/photos:/app/photos
+    restart: unless-stopped
+volumes:
+  multi4channels:
+    name: ${HOST_VOLUME}
