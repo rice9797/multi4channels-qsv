@@ -11,10 +11,8 @@ RUN echo "deb http://deb.debian.org/debian bookworm main contrib non-free non-fr
 # Install dependencies, including FFmpeg and Intel drivers
 RUN apt-get update && apt-get install -y \
     python3 python3-venv python3-pip curl nano ffmpeg \
-    intel-media-va-driver-non-free \
+    intel-media-va-driver-non-free vainfo \
     --no-install-recommends && \
-    apt-get install -y --no-install-recommends vainfo || \
-    echo "Warning: vainfo not found, continuing without it" && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
 RUN useradd -m appuser

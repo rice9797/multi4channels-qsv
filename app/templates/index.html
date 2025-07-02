@@ -8,7 +8,8 @@
             text-align: center;
             margin: 0;
             padding: 0;
-            background-color: #f0f0f0;
+            background-color: #000000;
+            color: #ffffff;
         }
         #menu {
             position: absolute;
@@ -17,14 +18,15 @@
             font-size: 36px;
             cursor: pointer;
             z-index: 1000;
+            color: #ffffff;
         }
         #menuOptions {
             display: none;
             position: absolute;
             top: 60px;
             right: 20px;
-            background-color: white;
-            border: 1px solid #ccc;
+            background-color: #333333;
+            border: 1px solid #555555;
             font-size: 24px;
             z-index: 999;
         }
@@ -33,31 +35,63 @@
             width: 100%;
             padding: 10px;
             font-size: 24px;
+            background-color: #333333;
+            color: #ffffff;
+            border: none;
+            cursor: pointer;
+        }
+        #menuOptions button:hover {
+            background-color: #555555;
         }
         h1 {
             font-size: 40px;
-            margin-top: 80px;
+            margin-top: 20px;
+        }
+        #channelForm {
+            margin-top: 20px;
         }
         input {
             width: 120px;
             font-size: 28px;
             padding: 10px;
             margin: 10px;
+            background-color: #222222;
+            color: #ffffff;
+            border: 1px solid #555555;
         }
         button {
             font-size: 28px;
             padding: 12px 20px;
             margin: 10px;
+            background-color: #333333;
+            color: #ffffff;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #555555;
+        }
+        #endStreamBtn {
+            background-color: #ff0000;
+        }
+        #endStreamBtn:hover {
+            background-color: #cc0000;
         }
         #favorites {
-            margin-top: 30px;
+            margin-top: 20px;
             font-size: 26px;
         }
-        #channelForm {
-            position: fixed;
-            bottom: 40px;
-            width: 100%;
-            text-align: center;
+        #favorites div {
+            cursor: pointer;
+            margin: 5px;
+        }
+        #favorites div:hover {
+            color: #cccccc;
+        }
+        #channels {
+            display: none;
+            margin-top: 20px;
+            font-size: 26px;
         }
     </style>
 </head>
@@ -65,12 +99,10 @@
     <div id="menu" onclick="toggleMenu()">☰</div>
     <div id="menuOptions">
         <button onclick="reloadM3U()">Reload M3U from Channels</button>
-        <button onclick="loadChannels()">Available Channels</button>
+        <button onclick="showChannels()">Available Channels</button>
         <button onclick="endStream()">End Current Stream</button>
     </div>
     <h1>Multi4Channels</h1>
-
-    <div id="favorites"></div>
 
     <form id="channelForm">
         <input name="ch1" placeholder="Ch1" step="0.01">
@@ -78,11 +110,15 @@
         <input name="ch3" placeholder="Ch3" step="0.01">
         <input name="ch4" placeholder="Ch4" step="0.01"><br>
         <button type="submit">Start Stream</button>
-        <button type="button" style="background:red;color:white" onclick="endStream()">End Stream</button>
+        <button type="button" id="endStreamBtn" onclick="endStream()">End Stream</button>
     </form>
 
+    <div id="favorites"></div>
+    <div id="channels"></div>
+
     <script>
-        let favorites = new Set();
+        let favorites = [];
+        let channels = [];
 
         function toggleMenu() {
             let menu = document.getElementById("menuOptions");
@@ -91,22 +127,48 @@
 
         function reloadM3U() {
             fetch('/reload')
-              .then(r => r.json())
-              .then(data => alert(data.message || "Reloaded"))
-              .catch(() => alert("Reload failed"));
+                .then(r => r.json())
+                .then(data => {
+                    alert(data.message || "Reloaded");
+                    loadFavorites();
+                })
+                .catch(() => alert("Reload failed"));
+        }
+
+        function showChannels() {
+            document.getElementById("channels").style.display = "block";
+            document.getElementById("favorites").style.display = "none";
+            loadChannels();
         }
 
         function loadChannels() {
             fetch('/channels')
-              .then(r => r.json())
-              .then(data => {
-                  let out = "";
-                  data.channels.forEach(ch => {
-                      let filled = data.favorites.some(fav => fav.number === ch.number);
-                      out += `<div>${ch.number} - ${ch.name} <span onclick="toggleFav('${ch.number}', '${ch.name}')" style="cursor:pointer;color:${filled?'red':'gray'}">♥</span></div>`;
-                  });
-                  document.getElementById("favorites").innerHTML = out;
-              });
+                .then(r => r.json())
+                .then(data => {
+                    channels = data.channels;
+                    favorites = data.favorites;
+                    let out = "";
+                    data.channels.forEach(ch => {
+                        let filled = favorites.some(fav => fav.number === ch.number);
+                        out += `<div>${ch.number} - ${ch.name} <span onclick="toggleFav('${ch.number}', '${ch.name}')" style="cursor:pointer;color:${filled?'red':'gray'}">♥</span></div>`;
+                    });
+                    document.getElementById("channels").innerHTML = out;
+                });
+        }
+
+        function loadFavorites() {
+            fetch('/channels')
+                .then(r => r.json())
+                .then(data => {
+                    favorites = data.favorites;
+                    let out = "";
+                    data.favorites.forEach(fav => {
+                        out += `<div onclick="addToChannelBox('${fav.number}')">${fav.number} - ${fav.name}</div>`;
+                    });
+                    document.getElementById("favorites").innerHTML = out;
+                    document.getElementById("channels").style.display = "none";
+                    document.getElementById("favorites").style.display = "block";
+                });
         }
 
         function toggleFav(number, name) {
@@ -115,11 +177,25 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ number, name })
             })
-            .then(r => r.json())
-            .then(data => {
-                favorites = new Set(data.favorites.map(f => f.number));
-                loadChannels();
-            });
+                .then(r => r.json())
+                .then(data => {
+                    favorites = data.favorites;
+                    if (document.getElementById("channels").style.display === "block") {
+                        loadChannels();
+                    } else {
+                        loadFavorites();
+                    }
+                });
+        }
+
+        function addToChannelBox(number) {
+            let inputs = document.querySelectorAll("#channelForm input");
+            for (let input of inputs) {
+                if (!input.value) {
+                    input.value = number;
+                    break;
+                }
+            }
         }
 
         document.getElementById("channelForm").addEventListener("submit", function(e) {
@@ -137,12 +213,7 @@
         }
 
         // Load favorites on page load
-        fetch('/channels')
-            .then(r => r.json())
-            .then(data => {
-                favorites = new Set(data.favorites.map(f => f.number));
-                loadChannels();
-            });
+        loadFavorites();
     </script>
 </body>
 </html>

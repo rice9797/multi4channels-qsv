@@ -100,11 +100,17 @@ def detect_qsv():
         if not os.path.exists("/dev/dri"):
             print("*** No /dev/dri found, QSV unavailable")
             return False
-        result = subprocess.run(["vainfo"], capture_output=True, text=True, check=False)
+        result = subprocess.run(["vainfo"], capture_output=True, text=True, check=True)
         if result.returncode == 0 and "VAEntrypointEncSlice" in result.stdout and "H.264" in result.stdout:
             print("*** Intel QuickSync H.264 encoding detected")
+            print(f"*** vainfo output: {result.stdout}")
             return True
         print("*** vainfo failed or no QSV H.264 support")
+        print(f"*** vainfo output: {result.stdout if result.stdout else 'No output'}")
+        return False
+    except subprocess.CalledProcessError as e:
+        print(f"*** Error running vainfo: {e}")
+        print(f"*** vainfo stderr: {e.stderr}")
         return False
     except Exception as e:
         print(f"*** Error detecting QSV: {e}")
@@ -147,7 +153,7 @@ def start_stream():
         STREAM_PROCESS = None
         time.sleep(1)
 
-    urls = [f"http://{CDVR_HOST}:{CDVR_PORT}/devices/ANY/channels/{ch}/stream.mpg" for ch in channels]
+    urls = [f"http://{CDVR_HOST}:{CDVR_PORT}/play/tuner/{ch}" for ch in channels]
     num_inputs = len(urls)
 
     if num_inputs == 0:
