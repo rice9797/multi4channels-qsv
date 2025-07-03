@@ -1,15 +1,15 @@
-
 FROM debian:bookworm-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
+ENV LIBVA_DRIVER_NAME=iHD
 
 # Set custom sources.list
 RUN echo "deb http://deb.debian.org/debian bookworm main contrib non-free non-free-firmware" > /etc/apt/sources.list && \
     echo "deb http://deb.debian.org/debian bookworm-updates main contrib non-free non-free-firmware" >> /etc/apt/sources.list && \
     echo "deb http://security.debian.org/debian-security bookworm-security main contrib non-free non-free-firmware" >> /etc/apt/sources.list
 
-# Install dependencies, including FFmpeg and Intel drivers
+# Install dependencies, matching flask_app.py
 RUN apt-get update && apt-get install -y \
     python3 python3-venv python3-pip curl nano ffmpeg \
     intel-media-va-driver-non-free vainfo \

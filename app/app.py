@@ -5,7 +5,7 @@ import threading
 import time
 import requests
 import json
-from flask import Flask, request, render_template_string, jsonify
+from flask import Flask, Response, request, render_template_string, jsonify, stream_with_context
 import re
 import logging
 import sys
@@ -24,12 +24,11 @@ logging.basicConfig(
 logging.info("*** app.py started")
 
 # Environment variables
-CDVR_HOST = os.getenv("CDVR_HOST", "192.168.1.152")
+CDVR_HOST = os.getenv("CDVR_HOST", "192.168.1.151")
 CDVR_PORT = int(os.getenv("CDVR_PORT", "8089"))
 CDVR_CHNLNUM = os.getenv("CDVR_CHNLNUM", "240")
-RTP_HOST = os.getenv("RTP_HOST", "192.168.1.152")
-RTP_PORT = str(os.getenv("RTP_PORT", "4444"))
 WEB_PAGE_PORT = int(os.getenv("WEB_PAGE_PORT", "9799"))
+STREAM_PORT = int(os.getenv("STREAM_PORT", "5444"))
 CHECK_INTERVAL_SECONDS = 60
 KILL_COUNTDOWN_MINUTES = 6
 CHANNELS = []
@@ -39,10 +38,10 @@ STREAM_PROCESS = None
 CURRENT_PID = None
 
 # Mosaic settings
-TARGET_WIDTH = 1920
-TARGET_HEIGHT = 1080
-TARGET_FPS = float(os.getenv("OUTPUT_FPS", "60"))
-BITRATE = "8000k"
+TARGET_WIDTH = 1280
+TARGET_HEIGHT = 720
+TARGET_FPS = float(os.getenv("OUTPUT_FPS", "29.97"))
+BITRATE = "5120k"
 
 def load_favorites():
     """Load favorite channels from JSON file."""
@@ -400,8 +399,8 @@ HTML_TEMPLATE = """
     <div class="container">
         <form method="post" action="/start" id="stream-form">
             <div class="grid">
-                <div><input name="ch1" type="text" placeholder="Ch1" required inputmode="decimal"></div>
-                <div><input name="ch2" type="text" placeholder="Ch2" required inputmode="decimal"></div>
+                <div><input name="ch1" type="text" placeholder="Ch1" inputmode="decimal"></div>
+                <div><input name="ch2" type="text" placeholder="Ch2" inputmode="decimal"></div>
                 <div><input name="ch3" type="text" placeholder="Ch3" inputmode="decimal"></div>
                 <div><input name="ch4" type="text" placeholder="Ch4" inputmode="decimal"></div>
             </div>
@@ -552,18 +551,28 @@ HTML_TEMPLATE = """
 
         streamForm.addEventListener('submit', e => {
             e.preventDefault();
-            fetch('/start', {
-                method: 'POST',
-                body: new FormData(streamForm)
-            })
-            .then(response => response.text())
-            .then(() => {
-                notificationText.textContent = 'Stream started';
-                notification.style.display = 'block';
-                setTimeout(() => {
-                    notification.style.display = 'none';
-                }, 5000);
+            const formData = new FormData(streamForm);
+            const channels = [];
+            formData.forEach((value, key) => {
+                if (value) channels.push(value);
             });
+            const url = '/combine?' + channels.map(ch => `ch=${ch}`).join('&');
+            fetch(url)
+                .then(response => {
+                    if (response.ok) {
+                        notificationText.textContent = 'Stream started';
+                        notification.style.display = 'block';
+                        setTimeout(() => {
+                            notification.style.display = 'none';
+                        }, 5000);
+                    } else {
+                        notificationText.textContent = 'Failed to start stream';
+                        notification.style.display = 'block';
+                        setTimeout(() => {
+                            notification.style.display = 'none';
+                        }, 5000);
+                    }
+                });
         });
     </script>
 </body>
@@ -576,135 +585,140 @@ def index():
 
 @app.route("/start", methods=["POST"])
 def start_stream():
-    global STREAM_PROCESS, CURRENT_PID
-
     ch1 = request.form.get("ch1")
     ch2 = request.form.get("ch2")
     ch3 = request.form.get("ch3")
     ch4 = request.form.get("ch4")
     channels = [ch for ch in [ch1, ch2, ch3, ch4] if ch]
+    if not channels:
+        return "No channels provided", 400
+    query = "&".join(f"ch={ch}" for ch in channels)
+    return jsonify({"message": f"Stream started, access at /combine?{query}"})
 
-    logging.info("*** Starting stream with channels: %s", ', '.join(channels))
+@app.route("/combine")
+def combine_streams():
+    global STREAM_PROCESS, CURRENT_PID
+    channels = request.args.getlist('ch')[:4]
+    if not channels:
+        return "No channels provided", 400
 
+    # Terminate existing stream
     if CURRENT_PID and STREAM_PROCESS:
         try:
             logging.info("*** Terminating FFmpeg process PID %d", CURRENT_PID)
-            os.kill(CURRENT_PID, signal.SIGTERM)
+            STREAM_PROCESS.terminate()
             STREAM_PROCESS.wait(timeout=5)
             logging.info("*** FFmpeg process PID %d terminated", CURRENT_PID)
         except ProcessLookupError:
             logging.info("*** Previous FFmpeg process already terminated")
         except subprocess.TimeoutExpired:
             logging.warning("*** FFmpeg process PID %d did not terminate gracefully, forcing kill", CURRENT_PID)
-            os.kill(CURRENT_PID, signal.SIGKILL)
+            STREAM_PROCESS.kill()
             STREAM_PROCESS.wait(timeout=2)
         except Exception as e:
             logging.error("*** Error terminating FFmpeg process: %s", str(e))
         CURRENT_PID = None
         STREAM_PROCESS = None
-        time.sleep(1)
 
     urls = [f"http://{CDVR_HOST}:{CDVR_PORT}/devices/ANY/channels/{ch}/stream.mpg" for ch in channels]
     num_inputs = len(urls)
 
-    if num_inputs == 0:
-        return "No channels provided", 400
+    ffmpeg_cmd = ['ffmpeg', '-hide_banner', '-loglevel', 'error']
 
-    ffmpeg_cmd = [
-        "ffmpeg", "-hide_banner", "-loglevel", "error",
-        "-i", "/app/photos/bg.jpg"
-    ]
-
-    # Add input streams
+    # Add input URLs
     for url in urls:
-        ffmpeg_cmd += ["-i", url]
+        ffmpeg_cmd += ['-i', url]
 
-    # Build filter complex
+    # Build scaling filters
     filter_parts = [
-        f"[0:v]fps={TARGET_FPS},scale={TARGET_WIDTH}:{TARGET_HEIGHT},setsar=1[v0]"
-    ]
-    for i in range(num_inputs):
-        filter_parts.append(
-            f"[{i+1}:v]fps={TARGET_FPS},scale={TARGET_WIDTH//2}:{TARGET_HEIGHT//2},setsar=1[v{i+1}]"
-        )
-
-    # Mosaic layout
-    positions = [
-        (0, 0),                    # Top-left
-        (TARGET_WIDTH//2, 0),      # Top-right
-        (0, TARGET_HEIGHT//2),     # Bottom-left
-        (TARGET_WIDTH//2, TARGET_HEIGHT//2)  # Bottom-right
-    ]
-    mosaic_parts = []
-    for i in range(num_inputs):
-        x, y = positions[i]
-        mosaic_parts.append(f"[v{i+1}]overlay={x}:{y}")
-    if mosaic_parts:
-        filter_parts.append(f"[v0]{''.join(mosaic_parts)}[v]")
-
-    filter_complex = ";".join(filter_parts) if num_inputs > 0 else "[0:v]copy[v]"
-
-    ffmpeg_cmd += [
-        "-filter_complex", filter_complex,
-        "-map", "[v]"
+        f'[{i}:v]fps={TARGET_FPS},scale={TARGET_WIDTH//2}:{TARGET_HEIGHT//2},setsar=1[v{i}]' for i in range(num_inputs)
     ]
 
-    # Map audio tracks with metadata
+    # Build xstack layout
+    layout_map = {
+        1: "[v0]xstack=inputs=1:layout=0_0[v]",
+        2: "[v0][v1]xstack=inputs=2:layout=0_0|w0_0[v]",
+        3: "[v0][v1][v2]xstack=inputs=3:layout=0_0|w0_0|0_h0[v]",
+        4: "[v0][v1][v2][v3]xstack=inputs=4:layout=0_0|w0_0|0_h0|w0_h0[v]"
+    }
+    filter_parts.append(layout_map[num_inputs])
+
+    filter_complex = ';'.join(filter_parts)
+
+    ffmpeg_cmd += ['-filter_complex', filter_complex, '-map', '[v]']
+
+    # Map all audio tracks individually
     for i, ch in enumerate(channels):
         ffmpeg_cmd += [
-            "-map", f"{i+1}:a",
-            "-metadata:s:a:%d" % i, f"title=Ch {ch} Audio"
+            '-map', f'{i}:a',
+            '-metadata:s:a:%d' % i, f'title=Ch {ch} Audio'
         ]
 
     # Encoding settings
     encoding_params = [
-        "-c:v", VIDEO_CODEC,
-        "-b:v", BITRATE,
-        "-preset", "fast" if VIDEO_CODEC == "libx264" else "medium",
-        "-c:a", "aac",
-        "-b:a", "128k",
-        "-f", "mpegts",
-        f"udp://{RTP_HOST}:{RTP_PORT}?ttl=10"
+        '-c:v', VIDEO_CODEC,
+        '-b:v', BITRATE,
+        '-preset', 'fast' if VIDEO_CODEC == 'libx264' else 'medium',
+        '-c:a', 'aac',
+        '-b:a', '128k',
+        '-f', 'mpegts',
+        'pipe:1'
     ]
-    if VIDEO_CODEC == "h264_qsv":
-        encoding_params += ["-vf", "hwupload=extra_hw_frames=64,format=qsv"]
+    if VIDEO_CODEC == 'h264_qsv':
+        encoding_params += ['-vf', 'hwupload=extra_hw_frames=64,format=qsv']
     ffmpeg_cmd += encoding_params
 
-    try:
-        STREAM_PROCESS = subpoena.Popen(ffmpeg_cmd, stderr=subprocess.PIPE)
+    def generate():
+        global STREAM_PROCESS, CURRENT_PID
+        STREAM_PROCESS = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         CURRENT_PID = STREAM_PROCESS.pid
-        logging.info("*** FFmpeg started with PID %d", CURRENT_PID)
-    except Exception as e:
-        logging.error("*** Error starting FFmpeg process: %s", str(e))
-        return "Failed to start stream", 500
+        logging.info("*** FFmpeg started with PID %d for channels: %s", CURRENT_PID, ', '.join(channels))
+        try:
+            while True:
+                chunk = STREAM_PROCESS.stdout.read(1024 * 16)
+                if not chunk:
+                    break
+                yield chunk
+        except Exception as e:
+            logging.error("*** Error streaming: %s", str(e))
+        finally:
+            if STREAM_PROCESS:
+                STREAM_PROCESS.terminate()
+                try:
+                    STREAM_PROCESS.wait(timeout=5)
+                    logging.info("*** FFmpeg process PID %d terminated", CURRENT_PID)
+                except subprocess.TimeoutExpired:
+                    STREAM_PROCESS.kill()
+                    logging.warning("*** FFmpeg process PID %d killed", CURRENT_PID)
+                CURRENT_PID = None
+                STREAM_PROCESS = None
 
+    # Start monitoring for Channels DVR activity
     if CDVR_CHNLNUM:
         threading.Thread(target=watch_for_quit, daemon=True).start()
 
-    return "Stream started"
+    return Response(stream_with_context(generate()), mimetype='video/MP2T')
 
 @app.route("/stop", methods=["POST"])
 def stop_stream():
     global STREAM_PROCESS, CURRENT_PID
-
     if CURRENT_PID and STREAM_PROCESS:
         try:
             logging.info("*** Stopping FFmpeg process PID %d", CURRENT_PID)
-            os.kill(CURRENT_PID, signal.SIGTERM)
+            STREAM_PROCESS.terminate()
             STREAM_PROCESS.wait(timeout=5)
             logging.info("*** FFmpeg process PID %d stopped", CURRENT_PID)
         except ProcessLookupError:
             logging.info("*** FFmpeg process already stopped")
         except subprocess.TimeoutExpired:
             logging.warning("*** FFmpeg process PID %d did not stop gracefully, forcing kill", CURRENT_PID)
-            os.kill(CURRENT_PID, signal.SIGKILL)
+            STREAM_PROCESS.kill()
             STREAM_PROCESS.wait(timeout=2)
         except Exception as e:
             logging.error("*** Error stopping FFmpeg process: %s", str(e))
         finally:
             CURRENT_PID = None
             STREAM_PROCESS = None
-            os.system(f"fuser -k -n udp {RTP_PORT} 2>/dev/null")
             return jsonify({"message": "Stream closed successfully"})
     else:
         return jsonify({"message": "No stream is running"})
@@ -736,7 +750,7 @@ def save_favorites_endpoint():
     return jsonify({"message": "Favorites saved successfully"})
 
 def watch_for_quit():
-    global CURRENT_PID
+    global CURRENT_PID, STREAM_PROCESS
     inactive_minutes = 0
     logging.info("*** Monitoring activity on channel %s", CDVR_CHNLNUM)
 
@@ -751,13 +765,16 @@ def watch_for_quit():
                     inactive_minutes += 1
                     logging.info("*** Channel no longer being watched. Countdown to kill: %d / %d min", inactive_minutes, KILL_COUNTDOWN_MINUTES)
                     if inactive_minutes >= KILL_COUNTDOWN_MINUTES:
-                        if CURRENT_PID:
+                        if CURRENT_PID and STREAM_PROCESS:
                             try:
-                                os.kill(CURRENT_PID, signal.SIGKILL)
-                                logging.info("*** Killed FFmpeg process PID %d", CURRENT_PID)
+                                logging.info("*** Killing FFmpeg process PID %d", CURRENT_PID)
+                                STREAM_PROCESS.terminate()
+                                STREAM_PROCESS.wait(timeout=5)
+                                logging.info("*** FFmpeg process PID %d killed", CURRENT_PID)
                             except Exception as e:
                                 logging.error("*** Error killing FFmpeg: %s", str(e))
                             CURRENT_PID = None
+                            STREAM_PROCESS = None
                         return
         except Exception as e:
             logging.error("*** Error checking DVR activity: %s", str(e))

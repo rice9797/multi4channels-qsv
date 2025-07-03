@@ -1,20 +1,22 @@
+version: '3.9'
 services:
   multi4channels-qsv:
     image: ghcr.io/rice9797/multi4channels-qsv:${TAG}
     container_name: multi4channels-qsv
-    ports:
-      - ${HOST_PORT}:${WEB_PAGE_PORT}
-      - ${HOST_RTP}:${RTP_PORT}/udp
-    devices:
-      - /dev/dri:/dev/dri
+    privileged: true  # Temporary for QSV debugging
     environment:
+      - LIBVA_DRIVER_NAME=iHD
       - CDVR_HOST=${CDVR_HOST}
       - CDVR_PORT=${CDVR_PORT}
       - CDVR_CHNLNUM=${CDVR_CHNLNUM}
       - OUTPUT_FPS=${OUTPUT_FPS}
-      - RTP_HOST=${RTP_HOST}
-      - RTP_PORT=${RTP_PORT}
       - WEB_PAGE_PORT=${WEB_PAGE_PORT}
+      - STREAM_PORT=${STREAM_PORT}
+    ports:
+      - ${HOST_PORT}:${WEB_PAGE_PORT}
+      - ${STREAM_PORT}:${STREAM_PORT}
+    devices:
+      - /dev/dri:/dev/dri
     volumes:
       - multi4channels-qsv:/app/data
       - ./app/photos:/app/photos

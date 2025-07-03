@@ -13,4 +13,4 @@ ls -ld /app/data
 echo "*** Final /app/data permissions"
 ls -l /app/data
 echo "*** Running start.sh"
-/start.sh
+exec /start.sh
